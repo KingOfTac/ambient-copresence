@@ -1,0 +1,26 @@
+{
+  "name": "@kingoftac/ambient-copresence",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KingOfTac/ambient-copresence.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/KingOfTac/ambient-copresence/issues"
+  },
+  "homepage": "https://github.com/KingOfTac/ambient-copresence#readme",
+  "dependencies": {
+    "@microsoft/fast-element": "^2.1.0",
+    "partykit": "^0.0.111"
+  },
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {}
+}
