@@ -16,11 +16,14 @@
   "homepage": "https://github.com/KingOfTac/ambient-copresence#readme",
   "dependencies": {
     "@microsoft/fast-element": "^2.1.0",
-    "partykit": "^0.0.111"
+    "partykit": "^0.0.111",
+    "partysocket": "^1.0.3"
   },
   "workspaces": [
     "server",
     "client"
   ],
-  "scripts": {}
+  "scripts": {
+    "server:dev": "npm run dev -w server"
+  }
 }

@@ -3,5 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "description": "",
-  "scripts": {}
+  "scripts": {
+    "dev": "npx partykit dev"
+  }
 }
