@@ -1,194 +1,288 @@
-import { css, customElement, FASTElement, html, observable, ref } from '@microsoft/fast-element';
 import './style.css';
+import {
+  css,
+  customElement,
+  FASTElement,
+  html,
+  observable,
+  ref
+} from '@microsoft/fast-element';
 import PartySocket from 'partysocket';
 
+const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const partySocket = new PartySocket({
   host: 'localhost:1999',
   room: 'my-room'
 });
 
-const vertexShaderSource = /*GLSL*/`
-  attribute vec2 a_position;
-  varying vec2 v_uv;
-
-  void main() {
-    v_uv = a_position;
-    gl_Position = vec4(a_position * 2.0 - 1.0, 0, 1);
-  }
-`;
-
-const fragmentShaderSource = /*GLSL*/`
-  precision mediump float;
-  uniform vec2 u_center;
-  uniform float u_radius;
-  uniform vec2 u_resolution;
-  varying vec2 v_uv;
-
-  void main() {
-    vec2 fragCoord = v_uv * u_resolution;
-    vec2 center = u_center * u_resolution;
-    float dist = distance(fragCoord, center);
-
-    float circle = smoothstep(u_radius * u_resolution.x + 1.5, u_radius * u_resolution.x + 1.5, dist);
-    vec3 color = mix(vec3(0.0, 0.5, 1.0), vec3(1.0, 1.0, 1.0), circle);
-    gl_FragColor = vec4(color, 1.0);
-  }
-`;
-
-let vertexShader, fragmentShader;
-
-function compileShader(gl: WebGLRenderingContext, source: string, type: GLenum) {
-  const shader = gl.createShader(type);
-
-  if (!shader) {
-    return null;
-  }
-
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    console.error(gl.getShaderInfoLog(shader));
-    gl.deleteShader(shader);
-    return null;
-  }
-
-  return shader;
+interface Circle {
+  x: number;
+  y: number;
+  radius: number;
+  vx: number;
+  vy: number;
+  id: string;
 }
 
-const template = html<App>`
-  <canvas ${ref('canvas')} width="800" height="400"></canvas>
-`;
+async function main() {
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) return null;
 
-const styles = css`
-  :host {
-    display: contents;
-    position: relative;
-  }
-  
-  canvas {
-  }
+  const device = await adapter.requestDevice();
+  if (!device) return null;
 
-  :host::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    z-index: 1;
-    backdrop-filter: blur(320px);
-  }
-`;
+  const context = canvas.getContext('webgpu') as GPUCanvasContext;
+  const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
 
-@customElement({ name: 'my-app', template, styles })
-class App extends FASTElement {
-  @observable
-  public canvas!: HTMLCanvasElement;
-  private canvasChanged() {
-    if (this.canvas instanceof HTMLCanvasElement) {
-      this.gl = this.canvas.getContext('webgl');
-    }
-  }
+  context.configure({
+    device,
+    format: presentationFormat,
+    alphaMode: 'opaque'
+  });
 
-  @observable
-  private gl: WebGLRenderingContext | null = null;
+  const quadVertices = new Float32Array([
+    -1.0, -1.0,
+    1.0, -1.0,
+    -1.0, 1.0,
+    -1.0, 1.0,
+    1.0, -1.0,
+    1.0, 1.0
+  ]);
 
-  public connectedCallback(): void {
-    super.connectedCallback();
+  const vertexBuffer = device.createBuffer({
+    size: quadVertices.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    mappedAtCreation: true
+  });
 
-    if (this.gl) {
-      vertexShader = compileShader(this.gl, vertexShaderSource, this.gl.VERTEX_SHADER) as WebGLShader;
-      fragmentShader = compileShader(this.gl, fragmentShaderSource, this.gl.FRAGMENT_SHADER) as WebGLShader;
+  new Float32Array(vertexBuffer.getMappedRange()).set(quadVertices);
+  vertexBuffer.unmap();
 
-      const program = this.gl.createProgram();
-      this.gl.attachShader(program, vertexShader);
-      this.gl.attachShader(program, fragmentShader);
-      this.gl.linkProgram(program);
+  let circles: Circle[] = [];
 
-      if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
-        console.error(this.gl.getProgramInfoLog(program));
+  partySocket.addEventListener('message', event => {
+    const message = JSON.parse(event.data);
+    console.log(message)
+
+    if (message.kind === 'state') {
+      if (!message.circles.length) {
+        circles = [];
       }
 
-      this.gl.useProgram(program);
+      circles.push(...message.circles);
+    }
+    
+    if (message.kind === 'spawn') {
+      circles.push(message.circle);
+    }
 
-      const positions = new Float32Array([
-        0, 0,
-        1, 0,
-        0, 1,
-        0, 1,
-        1, 0,
-        1, 1
-      ]);
+    if (message.kind === 'despawn') {
+      circles = circles.filter(circle => circle.id !== message.circle.id);
+    }
 
-      const positionBuffer = this.gl.createBuffer();
-      this.gl.bindBuffer(this.gl.ARRAY_BUFFER, positionBuffer);
-      this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW);
+    if (message.kind === 'update') {
+      const index = circles.findIndex(circle => circle.id === message.circle.id);
+      circles[index] = message.circle;
+    }
+  });
 
-      const aPositionLocation = this.gl.getAttribLocation(program, 'a_position');
-      this.gl.enableVertexAttribArray(aPositionLocation);
-      this.gl.vertexAttribPointer(aPositionLocation, 2, this.gl.FLOAT, false, 0, 0);
-
-      const uCenterLocation = this.gl.getUniformLocation(program, 'u_center');
-      const uRadiusLocation = this.gl.getUniformLocation(program, 'u_radius');
-      const uResolutionLocation = this.gl.getUniformLocation(program, 'u_resolution');
-
-      this.gl.uniform2f(uResolutionLocation , this.canvas.width, this.canvas.height);
-
-      let center = { x: 0.5, y: 0.5 };
-      let velocity = { x: 0.02, y: 0.03 };
-      let connectionCount = 1;
-      let scaleFactor = 0.01;
-      let lastTime = performance.now();
-
-      partySocket.addEventListener('message', event => {
-        const message = JSON.parse(event.data);
+  const getInstanceData = (): Float32Array => {
+    const data = new Float32Array(circles.length * 3);
+    circles.forEach((circle, i) => {
+      data[i * 3] = circle.x;
+      data[i * 3 + 1] = circle.y;
+      data[i * 3 + 2] = circle.radius;
+    });
+    
+    return data;
+  }
   
-        if (message.type === 'update') {
-          connectionCount = message.count;
-        }
+  let instanceData = getInstanceData();
+  let instanceBufferSize = instanceData.byteLength;
+  let instanceBuffer = device.createBuffer({
+    size: instanceBufferSize,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+
+  const updateInstanceBuffer = () => {
+    const newInstanceData = getInstanceData();
+    if (newInstanceData.byteLength > instanceBufferSize) {
+      instanceBuffer.destroy();
+      instanceBufferSize = newInstanceData.byteLength;
+      instanceBuffer = device.createBuffer({
+        size: instanceBufferSize,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       });
-      
-      const render = (now: number) => {
-        now *= 0.001;
-        const deltaTime = now - lastTime;
-        lastTime = now;
-        const computedRadius = connectionCount * scaleFactor;
+    }
 
-        center.x += velocity.x * deltaTime;
-        center.y += velocity.y * deltaTime;
+    device.queue.writeBuffer(instanceBuffer, 0, newInstanceData.buffer, newInstanceData.byteOffset, newInstanceData.byteLength);
+  }
 
-        if (center.x - computedRadius < 0 && velocity.x < 0) {
-          center.x = computedRadius;
-          velocity.x *= -1;
-        }
-        if (center.x + computedRadius > 1 && velocity.x > 0) {
-          center.x = 1 - computedRadius;
-          velocity.x *= -1;
-        }
-        if (center.y - computedRadius < 0 && velocity.y < 0) {
-          center.y = computedRadius;
-          velocity.y *= -1;
-        }
-        if (center.y + computedRadius > 1 && velocity.y > 0) {
-          center.y = 1 - computedRadius;
-          velocity.y *= -1;
-        }
+  const uniformBuffer = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
 
-        this.gl?.uniform2f(uCenterLocation, center.x, center.y);
-        this.gl?.uniform1f(uRadiusLocation, computedRadius);
+  const shaderCode = /*WGSL*/`
+    @group(0) @binding(0)
+    var<uniform> uAspect: f32;
 
-        this.gl?.viewport(0, 0, this.canvas.width, this.canvas.height);
-        this.gl?.clearColor(0, 0, 0, 1);
-        this.gl?.clear(this.gl.COLOR_BUFFER_BIT);
-        this.gl?.drawArrays(this.gl.TRIANGLES, 0, 6);
+    struct Vout {
+      @builtin(position) pos: vec4f,
+      @location(0) local: vec2f,
+    }
 
-        requestAnimationFrame(render);
+    @vertex
+    fn vs(
+      @location(0) position: vec2f,
+      @location(1) instancePos: vec2f,
+      @location(2) radius: f32,
+    ) -> Vout {
+      var out: Vout;
+      let pos = vec2f(position.x / uAspect, position.y);
+
+      out.pos = vec4f(pos * radius + instancePos, 0.0, 1.0);
+      out.local = position;
+
+      return out;
+    }
+
+    @fragment
+    fn fs(
+      @location(0) local: vec2f
+    ) -> @location(0) vec4f {
+      if (length(local) > 1.0) {
+        return vec4f(0.0, 0.0, 0.0, 0.0);
       }
 
-      requestAnimationFrame(render);
+      return vec4f(0.0, 0.5, 1.0, 0.3);
     }
+  `;
+
+  const shaderModule = device.createShaderModule({ code: shaderCode });
+  const vertexBuffers: GPUVertexBufferLayout[] = [
+    {
+      arrayStride: 2 * 4,
+      attributes: [
+        { shaderLocation: 0, offset: 0, format: 'float32x2' }
+      ],
+    },
+    {
+      arrayStride: 3 * 4,
+      stepMode: 'instance',
+      attributes: [
+        { shaderLocation: 1, offset: 0, format: 'float32x2' },
+        { shaderLocation: 2, offset: 8, format: 'float32' },
+      ],
+    },
+  ];
+
+  const pipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: {
+      module: shaderModule,
+      entryPoint: 'vs',
+      buffers: vertexBuffers
+    },
+    fragment: {
+      module: shaderModule,
+      entryPoint: 'fs',
+      targets: [
+        {
+          format: presentationFormat,
+          blend: {
+            color: {
+              srcFactor: 'src-alpha',
+              dstFactor: 'one-minus-src-alpha',
+              operation: 'add',
+            },
+            alpha: {
+              srcFactor: 'one',
+              dstFactor: 'zero',
+              operation: 'add',
+            }
+          }
+        }
+      ]
+    },
+    primitive: {
+      topology: 'triangle-list'
+    }
+  });
+
+  const bindGroup = device.createBindGroup({
+    layout: pipeline.getBindGroupLayout(0),
+    entries: [
+      {
+        binding: 0,
+        resource: { buffer: uniformBuffer }
+      }
+    ]
+  });
+
+  const updateCircles = () => {
+    circles.forEach(circle => {
+      circle.x += circle.vx;
+      circle.y += circle.vy;
+
+      if (circle.x + circle.radius > 1 || circle.x - circle.radius < -1) {
+        circle.vx = -circle.vx;
+      }
+      
+      if (circle.y + circle.radius > 1 || circle.y - circle.radius < -1) {
+        circle.vy = -circle.vy;
+      }
+    });
+
+    updateInstanceBuffer();
   }
+
+  const render = () => {
+    updateCircles();
+
+    const aspect = canvas.width / canvas.height;
+    device.queue.writeBuffer(uniformBuffer, 0, new Float32Array([aspect]));
+
+    const commandEncoder = device.createCommandEncoder();
+    const textureView = context.getCurrentTexture().createView();
+    const renderPass = commandEncoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: textureView,
+          clearValue: { r: 0.3, g: 0.3, b: 0.3, a: 1.0 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
+      ],
+    });
+
+    renderPass.setBindGroup(0, bindGroup);
+    renderPass.setPipeline(pipeline);
+    renderPass.setVertexBuffer(0, vertexBuffer);
+    renderPass.setVertexBuffer(1, instanceBuffer);
+    renderPass.draw(6, circles.length);
+    renderPass.end();
+
+    const commandBuffer = commandEncoder.finish();
+
+    device.queue.submit([commandBuffer]);
+
+    requestAnimationFrame(render);
+  };
+
+  const observer = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const canvas = entry.target as HTMLCanvasElement;
+      const width = entry.contentBoxSize[0].inlineSize;
+      const height = entry.contentBoxSize[0].blockSize;
+      canvas.width = Math.max(1, Math.min(width, device.limits.maxTextureDimension2D));
+      canvas.height = Math.max(1, Math.min(height, device.limits.maxTextureDimension2D));
+    }
+  });
+
+  observer.observe(canvas);
+
+  render();
 }
 
-document.body.appendChild(document.createElement('my-app'));
+main();
