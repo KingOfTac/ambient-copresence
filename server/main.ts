@@ -72,6 +72,7 @@ export default class WebSocketServer implements Server {
   private clientCount = 0;
   private clientCountChanged(oldCount: number, newCount: number) {
     if (newCount === 0) {
+      this._circles = [];
       return;
     }
 

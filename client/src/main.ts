@@ -1,12 +1,4 @@
 import './style.css';
-import {
-  css,
-  customElement,
-  FASTElement,
-  html,
-  observable,
-  ref
-} from '@microsoft/fast-element';
 import PartySocket from 'partysocket';
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
